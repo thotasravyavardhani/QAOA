@@ -64,6 +64,8 @@ class MaxCutRequest(BaseModel):
     p_layers: int = Field(default=2, ge=1, le=5)
     max_iter: int = Field(default=100, ge=10, le=500)
     method: str = Field(default="COBYLA")
+    initialization_strategy: str = Field(default="standard")
+
 
 class TSPRequest(BaseModel):
     distance_matrix: List[List[float]]
@@ -122,15 +124,9 @@ async def health_check():
 async def solve_maxcut(request: MaxCutRequest):
     """
     Solve Max-Cut problem using QAOA
-    
-    Args:
-        request: Max-Cut problem instance and parameters
-        
-    Returns:
-        Optimization results
     """
     try:
-        logger.info(f"Solving Max-Cut: {request.num_vertices} vertices")
+        logger.info(f"Solving Max-Cut: {request.num_vertices} vertices. Strategy: {request.initialization_strategy}")
         
         # Create graph
         G = nx.Graph()
@@ -145,7 +141,12 @@ async def solve_maxcut(request: MaxCutRequest):
         
         # Solve
         solver = MaxCutSolver(G, request.p_layers)
-        result = solver.solve(method=request.method, max_iter=request.max_iter)
+        result = solver.solve(
+            method=request.method, 
+            max_iter=request.max_iter,
+            # --- PASS NEW PARAMETER ---
+            initialization_strategy=request.initialization_strategy 
+        )
         
         # Store experiment
         experiment = ExperimentCreate(
@@ -155,7 +156,11 @@ async def solve_maxcut(request: MaxCutRequest):
                 "edges": request.edges,
                 "edge_weights": request.edge_weights
             },
-            parameters={"p_layers": request.p_layers, "max_iter": request.max_iter},
+            parameters={
+                "p_layers": request.p_layers, 
+                "max_iter": request.max_iter, 
+                "initialization_strategy": request.initialization_strategy
+            },
             results=result
         )
         
@@ -166,7 +171,7 @@ async def solve_maxcut(request: MaxCutRequest):
     except Exception as e:
         logger.error(f"Error solving Max-Cut: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 # ==================== TSP ====================
 
 @api_router.post("/tsp/solve")

@@ -16,7 +16,7 @@ from qiskit.circuit import Parameter
 from qiskit_aer import Aer
 from scipy.optimize import minimize
 import networkx as nx
-from typing import List, Tuple, Dict, Callable
+from typing import List, Tuple, Dict, Callable, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,16 +50,18 @@ class QAOAOptimizer:
         self.backend = Aer.get_backend('qasm_simulator')
         
         # Parameters
-        self.beta_params = [Parameter(f'β_{i}') for i in range(p_layers)]
-        self.gamma_params = [Parameter(f'γ_{i}') for i in range(p_layers)]
-        
+        #self.beta_params = [Parameter(f'β_{i}') for i in range(p_layers)]
+        #self.gamma_params = [Parameter(f'γ_{i}') for i in range(p_layers)]
+        # FIX 1: Use a single list of Parameters for all 2*p angles
+        self.qaoa_params = [Parameter(f'p_{i}') for i in range(2 * p_layers)]
+
         # Results storage
         self.optimization_history = []
         self.best_params = None
         self.best_cost = float('inf')
         
     def create_qaoa_circuit(self, cost_hamiltonian_func: Callable, 
-                           initial_state: str = 'superposition') -> QuantumCircuit:
+                           initial_angles: Optional[List[float]] = None) -> QuantumCircuit:
         """
         Create QAOA quantum circuit
         
@@ -73,19 +75,28 @@ class QAOAOptimizer:
         qr = QuantumRegister(self.num_qubits, 'q')
         qc = QuantumCircuit(qr)
         
-        # Initial state preparation (|+⟩^⊗n)
-        if initial_state == 'superposition':
+        # WARM START / STANDARD INITIALIZATION
+        if initial_angles is not None:
+            # WARM START: Apply Ry rotations
+            for i in range(self.num_qubits):
+                if i < len(initial_angles):
+                    qc.ry(initial_angles[i], i)
+            qc.barrier(label='Warm_Start_Init')
+        else:
+            # STANDARD: Uniform superposition (Hadamard gates)
             qc.h(range(self.num_qubits))
-        
+            qc.barrier(label='Init_Hadamard')
+    
         # QAOA layers
         for layer in range(self.p_layers):
+            gamma = self.qaoa_params[2 * layer]
+            beta = self.qaoa_params[2 * layer + 1]
+            
             # Cost Hamiltonian: U(C, γ)
-            cost_hamiltonian_func(qc, self.gamma_params[layer])
+            cost_hamiltonian_func(qc, gamma)
             
             # Mixer Hamiltonian: U(B, β) = ∏ e^(-iβX_i)
-            for qubit in range(self.num_qubits):
-                qc.rx(2 * self.beta_params[layer], qubit)
-        
+            qc.rx(2 * beta, range(self.num_qubits))
         # Measurement
         qc.measure_all()
         
@@ -131,10 +142,7 @@ class QAOAOptimizer:
         def objective_function(params):
             """Objective function to minimize"""
             # Bind parameters
-            param_dict = {}
-            for i in range(self.p_layers):
-                param_dict[self.beta_params[i]] = params[i]
-                param_dict[self.gamma_params[i]] = params[self.p_layers + i]
+            param_dict = dict(zip(self.qaoa_params, params))
             
             bound_circuit = circuit.assign_parameters(param_dict)
             
@@ -147,8 +155,9 @@ class QAOAOptimizer:
             expectation = self.compute_expectation(counts, cost_function)
             
             # Store history
+            params_list = params.copy().tolist() if isinstance(params, np.ndarray) else list(params)
             self.optimization_history.append({
-                'params': params.copy(),
+                'params': params_list,
                 'cost': expectation,
                 'counts': counts
             })
@@ -161,7 +170,7 @@ class QAOAOptimizer:
             return expectation
         
         # Initial parameters (random or informed)
-        initial_params = self._get_initial_params()
+        initial_params = self._get_initial_params(strategy='informed')
         
         # Optimize
         logger.info(f"Starting optimization with {method}")
@@ -172,11 +181,13 @@ class QAOAOptimizer:
             options={'maxiter': max_iter}
         )
         
+        optimal_params_list = result.x.tolist() if isinstance(result.x, np.ndarray) else list(result.x)
+        
         return {
             'success': result.success,
-            'optimal_params': result.x,
+            'optimal_params': optimal_params_list,
             'optimal_cost': result.fun,
-            'iterations': getattr(result, 'nit', getattr(result, 'nfev', len(self.optimization_history))),
+            'iterations': getattr(result, 'nfev', len(self.optimization_history)),
             'history': self.optimization_history,
             'message': str(result.message) if hasattr(result, 'message') else 'Optimization complete'
         }
@@ -190,15 +201,18 @@ class QAOAOptimizer:
         - informed: Use heuristics from literature
         - gradient: Gradient-based initialization
         """
-        if strategy == 'random':
-            return np.random.uniform(0, 2*np.pi, 2 * self.p_layers)
-        elif strategy == 'informed':
-            # Start with common good values
-            beta_init = np.random.uniform(0, np.pi/2, self.p_layers)
-            gamma_init = np.random.uniform(0, np.pi, self.p_layers)
-            return np.concatenate([beta_init, gamma_init])
-        else:
-            return np.random.uniform(0, 2*np.pi, 2 * self.p_layers)
+        if strategy == 'informed':
+            # Use common linear ramp heuristic: beta 0 to pi/4, gamma 0 to pi/2
+            betas = np.linspace(0, np.pi/4, self.p_layers)
+            gammas = np.linspace(0, np.pi/2, self.p_layers)
+            
+            # Interleave parameters: [beta_0, gamma_0, beta_1, gamma_1, ...]
+            initial_params = np.empty(2 * self.p_layers)
+            initial_params[0::2] = betas
+            initial_params[1::2] = gammas
+            return initial_params
+        # Fallback to random if strategy is unknown
+        return np.random.uniform(0, 2*np.pi, 2 * self.p_layers)
     
     def get_solution_probabilities(self, circuit: QuantumCircuit, 
                                    params: np.ndarray, shots: int = 8192) -> Dict:
@@ -214,19 +228,14 @@ class QAOAOptimizer:
             Probability distribution
         """
         # Bind parameters
-        param_dict = {}
-        for i in range(self.p_layers):
-            param_dict[self.beta_params[i]] = params[i]
-            param_dict[self.gamma_params[i]] = params[self.p_layers + i]
+        param_dict = dict(zip(self.qaoa_params, params))
         
         bound_circuit = circuit.assign_parameters(param_dict)
         
-        # Execute
         job = self.backend.run(bound_circuit, shots=shots)
         result = job.result()
         counts = result.get_counts()
         
-        # Convert to probabilities
         probabilities = {k: v/shots for k, v in counts.items()}
         
         return probabilities
@@ -244,10 +253,10 @@ class QAOAOptimizer:
         costs = [h['cost'] for h in self.optimization_history]
         
         return {
-            'initial_cost': costs[0],
-            'final_cost': costs[-1],
-            'best_cost': min(costs),
-            'improvement': (costs[0] - min(costs)) / costs[0] * 100,
+            'initial_cost': costs[0] if costs else None,
+            'final_cost': costs[-1] if costs else None,
+            'best_cost': min(costs) if costs else None,
+            'improvement': (costs[0] - min(costs)) / costs[0] * 100 if costs and costs[0] != 0 else 0,
             'iterations': len(costs),
             'convergence_rate': self._compute_convergence_rate(costs)
         }
