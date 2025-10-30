@@ -114,12 +114,9 @@ curl -X POST http://localhost:8001/api/maxcut/solve \
 ## 👥 Contributors
 
 **Vignan's Nirula Institute of Technology and Science for Women**
-- Kilaru Srikanth
-- Thota Sravya Vardhani
-- Attluri Udaya Lakshmi
-- Kota Mounika
-- Thotakura Gnana Prasuna
 
+- Thota Sravya Vardhani
 ---
 
 **Built with ❤️ for Quantum Computing Research**
+
