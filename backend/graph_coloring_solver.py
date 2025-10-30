@@ -5,9 +5,17 @@ Problem Definition:
 Assign colors to graph vertices such that no adjacent vertices share the same color,
 using minimum number of colors.
 
-Mathematical Formulation:
-Minimize number of colors k such that:
-- ∀(i,j)∈E: c_i ≠ c_j (adjacent vertices have different colors)
+Mathematical Formulation (QUBO):
+Binary variables: x_{i,k} = 1 if vertex i is assigned color k, else 0
+
+Objective: Minimize edge conflicts
+Cost = Σ_{(i,j)∈E} Σ_k x_{i,k} * x_{j,k}
+
+Constraint (with penalty M):
+Each vertex has exactly one color: Σ_k x_{i,k} = 1 for all i
+
+Total QUBO:
+H = Conflict_Term + M * Constraint_Penalties
 
 Applications:
 - Task scheduling
@@ -19,7 +27,7 @@ Applications:
 import numpy as np
 import networkx as nx
 from qiskit import QuantumCircuit
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 from qaoa_core import QAOAOptimizer
 import logging
 
@@ -27,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 class GraphColoringSolver:
     """
-    QAOA-based Graph Coloring Solver
+    QAOA-based Graph Coloring Solver with proper QUBO encoding
     """
     
     def __init__(self, graph: nx.Graph, num_colors: int, p_layers: int = 2):
@@ -44,106 +52,139 @@ class GraphColoringSolver:
         self.num_colors = num_colors
         self.p_layers = p_layers
         
-        # Encoding: n vertices × k colors = n*k qubits
-        # Use log encoding for larger graphs
-        if self.num_vertices * self.num_colors <= 20:
-            # One-hot encoding
-            self.num_qubits = self.num_vertices * self.num_colors
-            self.encoding = 'one-hot'
-        else:
-            # Binary encoding (log_2(k) bits per vertex)
-            self.num_qubits = self.num_vertices * int(np.ceil(np.log2(self.num_colors)))
-            self.encoding = 'binary'
+        # Store edges first (needed by _build_qubo_matrix)
+        self.edges = list(graph.edges())
+        
+        # One-hot encoding: n vertices × k colors = n*k qubits
+        # x_{i,k} means vertex i has color k
+        self.num_qubits = self.num_vertices * self.num_colors
+        self.encoding = 'one-hot'
+        
+        # Penalty parameter for constraint violations
+        # Should be larger than number of edges
+        self.penalty = 10.0 * len(self.edges) if len(self.edges) > 0 else 10.0
+        
+        # Build QUBO matrix
+        self.qubo_matrix = self._build_qubo_matrix()
         
         # Initialize QAOA
         self.qaoa = QAOAOptimizer(self.num_qubits, p_layers)
         
-        self.edges = list(graph.edges())
+        logger.info(f"Graph Coloring initialized: {self.num_vertices} vertices, {self.num_colors} colors, {self.num_qubits} qubits")
+    
+    def _build_qubo_matrix(self) -> np.ndarray:
+        """
+        Build QUBO matrix for Graph Coloring
+        
+        Returns:
+            QUBO matrix Q
+        """
+        n = self.num_vertices
+        k = self.num_colors
+        size = n * k
+        Q = np.zeros((size, size))
+        
+        # Helper function to get qubit index for x_{i,c}
+        def idx(vertex, color):
+            return vertex * k + color
+        
+        # 1. Objective: Minimize edge conflicts
+        # For each edge (u,v), penalize if both have same color
+        # Σ_{(u,v)∈E} Σ_c x_{u,c} * x_{v,c}
+        for u, v in self.edges:
+            for color in range(k):
+                u_idx = idx(u, color)
+                v_idx = idx(v, color)
+                
+                # Add penalty for same color assignment
+                if u_idx == v_idx:
+                    Q[u_idx][u_idx] += 1.0
+                else:
+                    Q[u_idx][v_idx] += 0.5
+                    Q[v_idx][u_idx] += 0.5
+        
+        # 2. Constraint: Each vertex has exactly one color
+        # (Σ_c x_{i,c} - 1)² for each vertex i
+        M = self.penalty
+        
+        for vertex in range(n):
+            for color1 in range(k):
+                i1 = idx(vertex, color1)
+                # Linear term: -Σ x
+                Q[i1][i1] += M * (-1)
+                # Quadratic terms
+                for color2 in range(color1 + 1, k):
+                    i2 = idx(vertex, color2)
+                    Q[i1][i2] += M
+                    Q[i2][i1] += M
+        
+        return Q
     
     def cost_hamiltonian(self, qc: QuantumCircuit, gamma) -> None:
         """
-        Apply cost Hamiltonian for Graph Coloring
+        Apply cost Hamiltonian for Graph Coloring using QUBO matrix
         
-        H_C penalizes:
-        1. Adjacent vertices with same color
+        H penalizes:
+        1. Adjacent vertices with same color (conflicts)
         2. Invalid colorings (vertex with multiple/no colors)
         
         Args:
             qc: Quantum circuit
             gamma: Cost parameter
         """
-        if self.encoding == 'one-hot':
-            # One-hot encoding
-            for edge in self.edges:
-                u, v = edge
-                # Penalize same color assignments
-                for color in range(self.num_colors):
-                    qubit_u = u * self.num_colors + color
-                    qubit_v = v * self.num_colors + color
-                    
-                    if qubit_u < self.num_qubits and qubit_v < self.num_qubits:
-                        # ZZ interaction: penalty if both have same color
-                        qc.cx(qubit_u, qubit_v)
-                        qc.rz(2 * gamma, qubit_v)
-                        qc.cx(qubit_u, qubit_v)
-        else:
-            # Binary encoding
-            bits_per_vertex = int(np.ceil(np.log2(self.num_colors)))
-            
-            for edge in self.edges:
-                u, v = edge
-                # Compare color bits
-                for bit in range(bits_per_vertex):
-                    qubit_u = u * bits_per_vertex + bit
-                    qubit_v = v * bits_per_vertex + bit
-                    
-                    if qubit_u < self.num_qubits and qubit_v < self.num_qubits:
-                        qc.cx(qubit_u, qubit_v)
-                        qc.rz(gamma, qubit_v)
-                        qc.cx(qubit_u, qubit_v)
+        n = self.num_qubits
+        
+        # Apply diagonal terms
+        for i in range(n):
+            if self.qubo_matrix[i][i] != 0:
+                qc.rz(2 * gamma * self.qubo_matrix[i][i], i)
+        
+        # Apply off-diagonal terms (ZZ interactions)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if self.qubo_matrix[i][j] != 0:
+                    qc.rzz(2 * gamma * self.qubo_matrix[i][j], i, j)
     
-    def decode_coloring(self, bitstring: str) -> Dict[int, int]:
+    def decode_coloring(self, bitstring: str) -> Tuple[Dict[int, int], bool]:
         """
-        Decode bitstring to vertex coloring
+        Decode bitstring to vertex coloring with validity check
         
         Args:
             bitstring: Binary string
             
         Returns:
-            Dictionary mapping vertex -> color
+            (coloring dict mapping vertex -> color, is_valid)
         """
         coloring = {}
+        is_valid = True
+        k = self.num_colors
         
-        if self.encoding == 'one-hot':
-            # One-hot: each vertex has k bits
-            for vertex in range(self.num_vertices):
-                start = vertex * self.num_colors
-                end = start + self.num_colors
-                
-                if end <= len(bitstring):
-                    vertex_bits = bitstring[start:end]
-                    # Assign color of first '1' bit
-                    color = vertex_bits.find('1')
-                    coloring[vertex] = color if color != -1 else 0
-                else:
-                    coloring[vertex] = 0
-        else:
-            # Binary encoding
-            bits_per_vertex = int(np.ceil(np.log2(self.num_colors)))
+        # One-hot encoding: each vertex has k bits
+        for vertex in range(self.num_vertices):
+            start = vertex * k
+            end = start + k
             
-            for vertex in range(self.num_vertices):
-                start = vertex * bits_per_vertex
-                end = start + bits_per_vertex
+            if end <= len(bitstring):
+                vertex_bits = bitstring[start:end]
+                # Find assigned colors (where bit is 1)
+                assigned_colors = [c for c, bit in enumerate(vertex_bits) if bit == '1']
                 
-                if end <= len(bitstring):
-                    vertex_bits = bitstring[start:end]
-                    # Convert binary to color index
-                    color = int(vertex_bits, 2) % self.num_colors
-                    coloring[vertex] = color
-                else:
+                if len(assigned_colors) == 1:
+                    # Valid: exactly one color
+                    coloring[vertex] = assigned_colors[0]
+                elif len(assigned_colors) == 0:
+                    # No color assigned: assign color 0 as default
                     coloring[vertex] = 0
+                    is_valid = False
+                else:
+                    # Multiple colors: take first one
+                    coloring[vertex] = assigned_colors[0]
+                    is_valid = False
+            else:
+                coloring[vertex] = 0
+                is_valid = False
         
-        return coloring
+        return coloring, is_valid
     
     def is_valid_coloring(self, coloring: Dict[int, int]) -> bool:
         """
@@ -162,7 +203,7 @@ class GraphColoringSolver:
     
     def count_conflicts(self, coloring: Dict[int, int]) -> int:
         """
-        Count number of edge conflicts
+        Count number of edge conflicts (adjacent vertices with same color)
         
         Args:
             coloring: Vertex -> color mapping
@@ -176,18 +217,38 @@ class GraphColoringSolver:
                 conflicts += 1
         return conflicts
     
-    def cost_function(self, bitstring: str) -> float:
+    def _calculate_cost(self, bitstring: str) -> float:
         """
-        Cost function (number of conflicts)
+        Calculate cost for a bitstring (conflicts + constraint penalties)
+        
+        Used during QAOA optimization
         
         Args:
             bitstring: Binary string
             
         Returns:
-            Number of conflicts
+            Total cost
         """
-        coloring = self.decode_coloring(bitstring)
-        return float(self.count_conflicts(coloring))
+        coloring, is_valid = self.decode_coloring(bitstring)
+        conflicts = self.count_conflicts(coloring)
+        
+        # Add penalty for invalid colorings
+        if not is_valid:
+            conflicts += self.penalty
+        
+        return float(conflicts)
+    
+    def cost_function(self, bitstring: str) -> float:
+        """
+        Cost function (number of conflicts + penalties)
+        
+        Args:
+            bitstring: Binary string
+            
+        Returns:
+            Number of conflicts with penalties
+        """
+        return self._calculate_cost(bitstring)
     
     def solve(self, method: str = 'COBYLA', max_iter: int = 100) -> Dict:
         """
@@ -215,15 +276,17 @@ class GraphColoringSolver:
         best_coloring = None
         best_conflicts = float('inf')
         is_valid = False
+        best_bitstring = None
         
         for bitstring, prob in sorted(probs.items(), key=lambda x: x[1], reverse=True)[:20]:
-            coloring = self.decode_coloring(bitstring)
+            coloring, valid = self.decode_coloring(bitstring)
             conflicts = self.count_conflicts(coloring)
             
             if conflicts < best_conflicts:
                 best_conflicts = conflicts
                 best_coloring = coloring
-                is_valid = (conflicts == 0)
+                is_valid = (conflicts == 0) and valid
+                best_bitstring = bitstring
                 
                 if is_valid:
                     break
@@ -235,28 +298,57 @@ class GraphColoringSolver:
         # Compute chromatic number bound
         chromatic_bound = self._compute_chromatic_bound()
         
-        return {
-            'success': opt_result['success'] and is_valid,
-            'coloring': best_coloring,
-            'num_conflicts': best_conflicts,
-            'is_valid': is_valid,
-            'optimal_params': opt_result['optimal_params'].tolist(),
-            'iterations': opt_result['iterations'],
+        # Convergence analysis
+        convergence = self.qaoa.analyze_convergence()
+        
+        # Build coloring string for display
+        coloring_string = ", ".join([f"V{v}:C{c}" for v, c in sorted(best_coloring.items())]) if best_coloring else "No solution"
+        
+        # Convert all numpy types to Python native types for JSON serialization
+        def to_native(obj):
+            """Convert numpy types to Python native types"""
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.int64, np.int32)):
+                return int(obj)
+            elif isinstance(obj, (np.floating, np.float64, np.float32)):
+                return float(obj)
+            elif isinstance(obj, np.bool_):
+                return bool(obj)
+            elif isinstance(obj, dict):
+                return {k: to_native(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [to_native(item) for item in obj]
+            return obj
+        
+        result = {
+            'success': bool(opt_result['success'] and is_valid),
+            'coloring': {int(k): int(v) for k, v in best_coloring.items()} if best_coloring else {},
+            'coloring_string': coloring_string,
+            'num_conflicts': int(best_conflicts),
+            'is_valid': bool(is_valid),
+            'best_bitstring': best_bitstring,
+            'optimal_params': [float(x) for x in opt_result['optimal_params']],
+            'iterations': int(opt_result['iterations']),
+            'convergence_analysis': to_native(convergence),
             'classical_comparison': {
-                'classical_coloring': classical_coloring,
-                'classical_conflicts': classical_conflicts,
-                'improvement': (classical_conflicts - best_conflicts)
+                'classical_coloring': {int(k): int(v) for k, v in classical_coloring.items()},
+                'classical_conflicts': int(classical_conflicts),
+                'improvement': int(classical_conflicts - best_conflicts)
             },
             'graph_metrics': {
-                'num_vertices': self.num_vertices,
-                'num_edges': len(self.edges),
-                'num_colors': self.num_colors,
-                'chromatic_bound': chromatic_bound,
+                'num_vertices': int(self.num_vertices),
+                'num_edges': int(len(self.edges)),
+                'num_colors': int(self.num_colors),
+                'chromatic_bound': int(chromatic_bound),
                 'encoding': self.encoding,
-                'num_qubits': self.num_qubits,
-                'p_layers': self.p_layers
+                'num_qubits': int(self.num_qubits),
+                'p_layers': int(self.p_layers),
+                'penalty_parameter': float(self.penalty)
             }
         }
+        
+        return result
     
     def _greedy_coloring(self) -> Dict[int, int]:
         """

@@ -72,23 +72,34 @@ class TSPRequest(BaseModel):
     p_layers: int = Field(default=2, ge=1, le=5)
     max_iter: int = Field(default=50, ge=10, le=200)
     method: str = Field(default="COBYLA")
+    
+    def model_post_init(self, __context):
+        # Enforce TSP limit: max 4 cities
+        if len(self.distance_matrix) > 4:
+            raise ValueError("TSP limited to maximum 4 cities for quantum simulation feasibility")
 
 class VRPRequest(BaseModel):
     distance_matrix: List[List[float]]
     demands: List[float]
     vehicle_capacity: float
-    num_vehicles: int
+    num_vehicles: int = Field(ge=1, le=2)
     p_layers: int = Field(default=2, ge=1, le=5)
     max_iter: int = Field(default=50, ge=10, le=200)
     method: str = Field(default="COBYLA")
+    
+    def model_post_init(self, __context):
+        # Enforce VRP limit: max 3 customers, 2 vehicles
+        if len(self.demands) > 3:
+            raise ValueError("VRP limited to maximum 3 customers for quantum simulation feasibility")
 
 class GraphColoringRequest(BaseModel):
-    num_vertices: int = Field(ge=2, le=10)
+    num_vertices: int = Field(ge=2, le=4)
     edges: List[List[int]]
-    num_colors: int = Field(ge=2, le=5)
+    num_colors: int = Field(ge=2, le=3)
     p_layers: int = Field(default=2, ge=1, le=5)
     max_iter: int = Field(default=100, ge=10, le=500)
     method: str = Field(default="COBYLA")
+
 
 class RandomInstanceRequest(BaseModel):
     problem_type: str
