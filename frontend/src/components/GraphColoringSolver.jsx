@@ -7,7 +7,10 @@ import { Label } from './ui/label';
 import { Select } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
-import { Loader2, Play, RefreshCw, CheckCircle, AlertCircle, Palette } from 'lucide-react';
+import { Loader2, Play, RefreshCw, CheckCircle, AlertCircle, Palette, TrendingUp, BarChart3 } from 'lucide-react';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import QuantumCircuitVisual from './QuantumCircuitVisual';
+import { GraphColoringFormula } from './MathFormula';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -77,33 +80,39 @@ export default function GraphColoringSolver() {
   };
 
   const colorNames = ['Red', 'Blue', 'Green', 'Yellow', 'Purple'];
-  const colorClasses = [
-    'bg-red-500',
-    'bg-blue-500',
-    'bg-green-500',
-    'bg-yellow-500',
-    'bg-purple-500'
-  ];
+  const colorClasses = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-purple-500'];
+
+  const getConvergenceData = () => {
+    if (!result?.convergence_analysis) return [];
+    const { initial_cost, final_cost, iterations } = result.convergence_analysis;
+    return Array.from({ length: Math.min(iterations, 20) }, (_, i) => ({
+      iteration: i,
+      cost: initial_cost + (final_cost - initial_cost) * (i / iterations)
+    }));
+  };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Input Panel */}
-      <Card data-testid="gc-input-panel">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Palette className="w-5 h-5" />
-            Graph Coloring Problem
-          </CardTitle>
-          <CardDescription>
-            Assign colors such that no adjacent vertices share the same color
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Alert>
-            <AlertDescription className="text-sm">
-              <strong>Limit:</strong> Maximum 4 vertices, 3 colors for quantum simulation
-            </AlertDescription>
-          </Alert>
+    <div className="space-y-6">
+      <GraphColoringFormula />
+
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        {/* Input Panel */}
+        <Card className="lg:col-span-2 shadow-lg border-2 border-pink-100" data-testid="gc-input-panel">
+          <CardHeader className="bg-gradient-to-r from-pink-600 to-purple-600 text-white">
+            <CardTitle className="flex items-center gap-2">
+              <Palette className="w-5 h-5" />
+              Graph Coloring Config
+            </CardTitle>
+            <CardDescription className="text-pink-100">
+              Assign colors to vertices (no adjacent same color)
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 pt-6">
+            <Alert className="bg-purple-50 border-purple-300">
+              <AlertDescription className="text-sm text-purple-800">
+                <strong>Limit:</strong> Max 4 vertices, 3 colors
+              </AlertDescription>
+            </Alert>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -132,19 +141,18 @@ export default function GraphColoringSolver() {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="edges">Edges (format: 0-1,1-2,0-2)</Label>
-            <Input
-              id="edges"
-              value={edges}
-              onChange={(e) => setEdges(e.target.value)}
-              placeholder="0-1,1-2,0-2"
-              data-testid="edges-input"
-            />
-            <p className="text-xs text-gray-500">
-              Example: 0-1,1-2,0-2 (creates a triangle)
-            </p>
-          </div>
+            <div className="space-y-2">
+              <Label htmlFor="edges" className="text-sm font-semibold">Edges (format: 0-1,1-2,0-2)</Label>
+              <Input
+                id="edges"
+                value={edges}
+                onChange={(e) => setEdges(e.target.value)}
+                placeholder="0-1,1-2,0-2"
+                data-testid="edges-input"
+                className="border-2 font-mono text-sm"
+              />
+              <p className="text-xs text-gray-500">Triangle: 0-1,1-2,0-2</p>
+            </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -176,203 +184,177 @@ export default function GraphColoringSolver() {
             </div>
           </div>
 
-          <div className="flex gap-2">
-            <Button
-              onClick={solveProblem}
-              disabled={loading || generating}
-              className="flex-1"
-              data-testid="solve-button"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Solving...
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 mr-2" />
-                  Solve with QAOA
-                </>
-              )}
-            </Button>
+            <div className="flex gap-2 pt-2">
+              <Button
+                onClick={solveProblem}
+                disabled={loading || generating}
+                className="flex-1 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 shadow-lg"
+                data-testid="solve-button"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Solving...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 mr-2" />
+                    Solve with QAOA
+                  </>
+                )}
+              </Button>
 
-            <Button
-              onClick={generateRandom}
-              disabled={loading || generating}
-              variant="outline"
-              data-testid="generate-button"
-            >
-              {generating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4" />
-              )}
-            </Button>
-          </div>
-
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="w-4 h-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Results Panel */}
-      <Card data-testid="gc-results-panel">
-        <CardHeader>
-          <CardTitle>Results</CardTitle>
-          <CardDescription>Graph coloring optimization results</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {!result && !loading && (
-            <div className="text-center py-12 text-gray-400">
-              <Palette className="w-16 h-16 mx-auto mb-4" />
-              <p>Configure graph and run QAOA to see results</p>
+              <Button
+                onClick={generateRandom}
+                disabled={loading || generating}
+                variant="outline"
+                className="border-2 border-pink-300"
+                data-testid="generate-button"
+              >
+                {generating ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+              </Button>
             </div>
-          )}
 
-          {loading && (
-            <div className="text-center py-12">
-              <Loader2 className="w-12 h-12 animate-spin mx-auto text-blue-600" />
-              <p className="mt-4 text-gray-600">Running quantum optimization...</p>
-            </div>
-          )}
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="w-4 h-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
 
-          {result && (
-            <div className="space-y-6">
-              {/* Status */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {result.is_valid ? (
-                    <>
-                      <CheckCircle className="w-5 h-5 text-green-600" />
-                      <Badge className="bg-green-100 text-green-800">Valid Coloring</Badge>
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-5 h-5 text-orange-600" />
-                      <Badge className="bg-orange-100 text-orange-800">
-                        {result.num_conflicts} Conflict{result.num_conflicts !== 1 ? 's' : ''}
-                      </Badge>
-                    </>
-                  )}
+        {/* Results Panel */}
+        <div className="lg:col-span-3 space-y-6">
+          <Card className="shadow-lg border-2 border-purple-100" data-testid="gc-results-panel">
+            <CardHeader className="bg-gradient-to-r from-purple-600 to-pink-600 text-white">
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5" />
+                Coloring Results
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-6">
+              {!result && !loading && (
+                <div className="text-center py-16 text-gray-400">
+                  <Palette className="w-20 h-20 mx-auto mb-4 opacity-30" />
+                  <p className="text-lg">Configure graph and run QAOA</p>
                 </div>
-                <span className="text-sm text-gray-600">
-                  {result.iterations} iterations
-                </span>
-              </div>
+              )}
 
-              {/* Key Metrics */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Conflicts</p>
-                  <p className="text-3xl font-bold text-blue-600">
-                    {result.num_conflicts}
-                  </p>
+              {loading && (
+                <div className="text-center py-16">
+                  <Loader2 className="w-16 h-16 animate-spin mx-auto text-purple-600 mb-4" />
+                  <p className="text-lg font-semibold">Running Quantum Graph Coloring...</p>
                 </div>
-                <div className="bg-green-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Colors Used</p>
-                  <p className="text-3xl font-bold text-green-600">
-                    {result.graph_metrics.num_colors}
-                  </p>
-                </div>
-              </div>
+              )}
 
-              {/* Vertex Coloring */}
-              <div>
-                <Label className="mb-2 block">Vertex Coloring</Label>
-                <div className="bg-gray-50 p-4 rounded space-y-2">
-                  {result.coloring && Object.entries(result.coloring).map(([vertex, color]) => (
-                    <div key={vertex} className="flex items-center justify-between p-2 bg-white rounded">
-                      <span className="font-semibold">Vertex {vertex}:</span>
-                      <div className="flex items-center gap-2">
-                        <div className={`w-4 h-4 rounded-full ${colorClasses[color] || 'bg-gray-400'}`} />
-                        <span className="text-sm">{colorNames[color] || `Color ${color}`}</span>
+              {result && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-5 rounded-xl shadow-lg">
+                      <p className="text-sm opacity-90">Conflicts</p>
+                      <p className="text-4xl font-bold">{result.num_conflicts}</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-pink-500 to-pink-600 text-white p-5 rounded-xl shadow-lg">
+                      <p className="text-sm opacity-90">Colors Used</p>
+                      <p className="text-4xl font-bold">{result.graph_metrics.num_colors}</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-5 rounded-xl shadow-lg">
+                      <p className="text-sm opacity-90">Valid</p>
+                      <p className="text-4xl font-bold">{result.is_valid ? '\u2713' : '\u2717'}</p>
+                    </div>
+                  </div>
+
+                  <Card className="border-2 border-purple-200 bg-purple-50">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base text-purple-900">Vertex Coloring</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="bg-white p-4 rounded-lg space-y-2">
+                        {result.coloring && Object.entries(result.coloring).map(([vertex, color]) => (
+                          <div key={vertex} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <span className="font-semibold text-lg">Vertex {vertex}</span>
+                            <div className="flex items-center gap-2">
+                              <div className={`w-8 h-8 rounded-full ${colorClasses[color] || 'bg-gray-400'} shadow-lg`} />
+                              <span className="text-sm font-semibold">{colorNames[color] || `Color ${color}`}</span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  ))}
-                  <p className="text-sm text-gray-600 text-center mt-3 pt-3 border-t">
-                    {result.coloring_string}
-                  </p>
-                </div>
-              </div>
+                    </CardContent>
+                  </Card>
 
-              {/* Performance Comparison */}
-              <div>
-                <Label className="mb-2 block">Performance Comparison</Label>
-                <div className="space-y-2 bg-gray-50 p-4 rounded">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">QAOA Conflicts:</span>
-                    <Badge variant="default">{result.num_conflicts}</Badge>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Classical (Greedy) Conflicts:</span>
-                    <Badge variant="secondary">
-                      {result.classical_comparison.classical_conflicts}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Improvement:</span>
-                    <Badge className="bg-green-100 text-green-800">
-                      {result.classical_comparison.improvement >= 0 ? '+' : ''}
-                      {result.classical_comparison.improvement}
-                    </Badge>
-                  </div>
-                </div>
-              </div>
+                  {result.convergence_analysis && (
+                    <Card className="border-2 border-indigo-200">
+                      <CardHeader className="bg-indigo-50">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <BarChart3 className="w-4 h-4" />
+                          Convergence Analysis
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-4">
+                        <ResponsiveContainer width="100%" height={200}>
+                          <AreaChart data={getConvergenceData()}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="iteration" />
+                            <YAxis />
+                            <Tooltip />
+                            <Area type="monotone" dataKey="cost" stroke="#a855f7" fill="#c084fc" />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                        <div className="grid grid-cols-3 gap-3 mt-4">
+                          <div className="bg-purple-50 p-3 rounded text-center">
+                            <p className="text-xs text-gray-600">Initial</p>
+                            <p className="text-lg font-bold">{result.convergence_analysis.initial_cost?.toFixed(2)}</p>
+                          </div>
+                          <div className="bg-purple-50 p-3 rounded text-center">
+                            <p className="text-xs text-gray-600">Final</p>
+                            <p className="text-lg font-bold">{result.convergence_analysis.final_cost?.toFixed(2)}</p>
+                          </div>
+                          <div className="bg-green-50 p-3 rounded text-center">
+                            <p className="text-xs text-gray-600">Improvement</p>
+                            <p className="text-lg font-bold text-green-700">{result.convergence_analysis.improvement?.toFixed(1)}%</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
 
-              {/* Convergence */}
-              {result.convergence_analysis && (
-                <div>
-                  <Label className="mb-2 block">Convergence Analysis</Label>
-                  <div className="bg-gray-50 p-4 rounded space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span>Initial Cost:</span>
-                      <span className="font-mono">
-                        {result.convergence_analysis.initial_cost?.toFixed(4)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Final Cost:</span>
-                      <span className="font-mono">
-                        {result.convergence_analysis.final_cost?.toFixed(4)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Improvement:</span>
-                      <Badge className="bg-green-100 text-green-800">
-                        {result.convergence_analysis.improvement?.toFixed(2)}%
-                      </Badge>
-                    </div>
-                  </div>
+                  <Card className="border-2 border-blue-200">
+                    <CardHeader className="bg-blue-50">
+                      <CardTitle className="text-base">Performance Comparison</CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center p-3 bg-purple-50 rounded-lg">
+                          <span className="font-semibold">QAOA Conflicts:</span>
+                          <Badge className="bg-purple-600">{result.num_conflicts}</Badge>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                          <span className="font-semibold">Classical Conflicts:</span>
+                          <Badge variant="secondary">{result.classical_comparison.classical_conflicts}</Badge>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
               )}
+            </CardContent>
+          </Card>
 
-              {/* Graph Info */}
-              <div className="text-xs text-gray-500 space-y-1">
-                <div className="flex justify-between">
-                  <span>Vertices:</span>
-                  <span>{result.graph_metrics.num_vertices}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Edges:</span>
-                  <span>{result.graph_metrics.num_edges}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Qubits Used:</span>
-                  <span>{result.graph_metrics.num_qubits}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Chromatic Bound:</span>
-                  <span>{result.graph_metrics.chromatic_bound}</span>
-                </div>
-              </div>
-            </div>
+          {result && result.graph_metrics && (
+            <QuantumCircuitVisual 
+              numQubits={result.graph_metrics.num_qubits} 
+              pLayers={pLayers}
+              problemType="graph_coloring"
+            />
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
